@@ -92,11 +92,9 @@ class JenkinsJobChecker < Sensu::Plugin::Check::CLI
     failed_builds = 0
     while count_builds > 0
       build = jenkins_api_client.job.get_build_details(config[:job_name], current_build_number)
-      puts "#{build["displayName"]} ----> #{build["result"]}"
       current_build_number -= 1
       next if build["result"].nil? #Don't care about the running jobs
       failed_builds += 1 if build["result"] == "FAILURE"
-
       count_builds -= 1
     end
     failed_builds
