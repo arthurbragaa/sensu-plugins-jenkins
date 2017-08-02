@@ -3,7 +3,8 @@
 #   check-jenkins-job-status
 #
 # DESCRIPTION:
-#   Query jenkins API asking for job status
+#   Query jenkins API for a given number of failed builds and alert if the number
+#   of failure is above the desired number
 #
 # OUTPUT:
 #   plain text
@@ -16,11 +17,9 @@
 #   jenkins_api_client
 #
 # USAGE:
-#   #YELLOW
+#   ruby bin/check-jenkins-job-status.rb --job build_ticket_box --builds 5
 #
 # NOTES:
-#   #YELLOW
-#   add url to job's log for CRITICAL state
 #
 # LICENSE:
 #   Copyright 2014 SUSE, GmbH <happy-customer@suse.de>
@@ -30,6 +29,7 @@
 
 require 'sensu-plugin/check/cli'
 require 'jenkins_api_client'
+require 'pry'
 
 #
 # Jenkins Job Check
@@ -39,25 +39,28 @@ class JenkinsJobChecker < Sensu::Plugin::Check::CLI
          description: 'hostname running Jenkins API',
          short: '-u JENKINS-API-HOST',
          long: '--url JENKINS-API-HOST',
+         required: false,
+         default: ENV['JENKINS_URL']
+
+  option :job_name,
+         description: 'Name of the a job',
+         short: '-j JOB-NAME',
+         long: '--job JOB-NAME',
          required: true
 
-  option :job_list,
-         description: 'Name of a job/pattern to query. Wrap with quotes. E.g. \'^GCC\'',
-         short: '-j JOB-LIST',
-         long: '--jobs JOB-LIST',
-         required: true
-
-  option :client_log_level,
-         description: 'log level option 0..3 to client',
-         short: '-v CLIENT-LOG-LEVEL',
-         long: '--verbose CLIENT-LOG-LEVEL',
-         default: 3
+  option :builds,
+         description: 'Number of failed builds to check',
+         short: '-b COUNT',
+         long: '--builds COUNT',
+         required: true,
+         proc: proc(&:to_i)
 
   option :username,
          description: 'Username for Jenkins instance',
          short: '-U USERNAME',
          long: '--username USERNAME',
-         required: false
+         required: false,
+         default: ENV['JENKINS_USER']
 
   option :password,
          description: "Password for Jenkins instance. Either set ENV['JENKINS_PASS'] or provide it as an option",
@@ -66,21 +69,11 @@ class JenkinsJobChecker < Sensu::Plugin::Check::CLI
          required: false,
          default: ENV['JENKINS_PASS']
 
-  option :include_warnings,
-         description: 'whether to report unstable jobs as a warning',
-         short: '-w',
-         long: '--include-warnings',
-         boolean: true,
-         required: false,
-         default: false
-
   def run
-    if failed_jobs.any?
-      critical "Jobs reporting failure: #{failed_job_names}, jobs reported as unstable: #{unstable_job_names}"
-    elsif unstable_jobs.any? && config[:include_warnings]
-      warning "Jobs reported as unstable: #{unstable_job_names}"
+    if failed_builds_count >= config[:builds]
+      critical "The last #{config[:builds]} #{config[:job_name]} jobs are failing on Jenkins"
     else
-      ok 'All queried jobs report success'
+      ok "Less than #{config[:builds]} #{config[:job_name]} jobs are failing on Jenkins"
     end
   end
 
@@ -94,44 +87,21 @@ class JenkinsJobChecker < Sensu::Plugin::Check::CLI
     )
   end
 
-  def jobs_statuses
-    @job_listing ||=
-      if config[:job_list] =~ /\^/
-        jenkins_api_client.job.list(config[:job_list]).reduce({}) do |listing, job_name| # rubocop:disable Style/EachWithObject
-          listing[job_name] = job_status(job_name)
-          listing
-        end
-      else
-        { config[:job_list] => job_status(config[:job_list]) }
-      end
-  end
+  def failed_builds_count
+    current_build_number = jenkins_api_client.job.get_current_build_number(config[:job_name])
+    count_builds = config[:builds]
+    failed_builds = 0
+    while count_builds > 0
+      build = jenkins_api_client.job.get_build_details(config[:job_name], current_build_number)
+      puts "#{build["displayName"]} ----> #{build["result"]}"
+      current_build_number -= 1
+      next if build["result"].nil? #Don't care about the running jobs
+      failed_builds += 1 if build["result"] == "FAILURE"
 
-  def job_status(job_name)
-    status = jenkins_api_client.job.get_current_build_status(job_name)
-    # If the job is currently running, get the status of the last build instead
-    if status == 'running'
-      last_build = jenkins_api_client.job.get_current_build_number(job_name) - 1
-      build = jenkins_api_client.job.get_build_details(job_name, last_build)
-      status = build['result'].downcase
+      count_builds -= 1
     end
-    status
-  rescue
-    critical "Error looking up Jenkins job: #{job_name}"
-  end
-
-  def unstable_jobs
-    jobs_statuses.select { |_job_name, status| status == 'unstable' }
-  end
-
-  def failed_jobs
-    jobs_statuses.select { |_job_name, status| status == 'failure' }
-  end
-
-  def unstable_job_names
-    unstable_jobs.keys.join(', ')
-  end
-
-  def failed_job_names
-    failed_jobs.keys.join(', ')
+    failed_builds
+  # rescue
+  #   critical "Error looking up Jenkins job: #{config[:job_name]}"
   end
 end
