@@ -29,7 +29,6 @@
 
 require 'sensu-plugin/check/cli'
 require 'jenkins_api_client'
-require 'pry'
 
 #
 # Jenkins Job Check
@@ -101,7 +100,7 @@ class JenkinsJobChecker < Sensu::Plugin::Check::CLI
       count_builds -= 1
     end
     failed_builds
-  # rescue
-  #   critical "Error looking up Jenkins job: #{config[:job_name]}"
+  rescue
+    critical "Error looking up Jenkins job: #{config[:job_name]}"
   end
 end
